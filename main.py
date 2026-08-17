@@ -52,10 +52,5 @@ def main():
 
     print("============= END ===============")
 
-    '''
-    print(f"Found {get_num_words(get_book_text('./books/frankenstein.txt'))} total words")
-    print(get_char_count(get_book_text('./books/frankenstein.txt')))
-    '''
-
 if __name__ == "__main__":
     main()
