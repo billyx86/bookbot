@@ -1,5 +1,5 @@
 import sys
-from stats import get_num_words, get_char_count
+from stats import get_char_count, get_num_words, get_most_common_words
 
 def get_book_text(filepath):
     """Read the book file and return its contents.
@@ -39,6 +39,8 @@ def main():
     book_contents = get_book_text(book)
     book_word_count = get_num_words(book_contents)
     book_char_count = get_char_count(book_contents)
+    total_chars = sum(book_char_count.values())
+    top_words = get_most_common_words(book_contents, 10)
 
     print("============ BOOKBOT ============")
     print(f"Analyzing book found at {book}...")
@@ -48,7 +50,12 @@ def main():
 
     for char in dict(sorted(book_char_count.items(), key=lambda item: item[1], reverse=True)):
         if char.isalpha():
-            print(f"{char}: {book_char_count[char]}")
+            pct = 100.0 * book_char_count[char] / total_chars
+            print(f"{char}: {book_char_count[char]} ({pct:.2f}%)")
+
+    print("-------- Most Common Words ------")
+    for word, count in top_words:
+        print(f"{word}: {count}")
 
     print("============= END ===============")
 
