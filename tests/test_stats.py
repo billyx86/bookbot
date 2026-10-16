@@ -1,12 +1,12 @@
-import sys
 import os
+import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from main import decode_book_bytes, get_book_text, looks_like_text
 from stats import get_char_count, get_most_common_words, get_num_words
-from main import get_book_text
 
 
 class TestGetNumWords:
@@ -66,6 +66,39 @@ class TestGetMostCommonWords:
         assert len(top) == 3
 
 
+class TestDecodeBookBytes:
+    def test_utf8_passthrough(self):
+        assert decode_book_bytes(b"hello") == "hello"
+
+    def test_utf8_bom_stripped(self):
+        assert decode_book_bytes("hello".encode("utf-8-sig")) == "hello"
+
+    def test_utf16_le_bom(self):
+        # encode("utf-16") writes a BOM (native byte order) up front.
+        assert decode_book_bytes("hi".encode("utf-16")) == "hi"
+
+    def test_utf16_be_bom(self):
+        assert decode_book_bytes(b"\xfe\xff" + "hi".encode("utf-16-be")) == "hi"
+
+    def test_latin1_fallback(self):
+        raw = "café".encode("latin-1")
+        assert decode_book_bytes(raw) == "café"
+
+    def test_latin1_of_garbage_never_raises(self):
+        # latin-1 maps every byte, so this must return (NUL-laden) text
+        # rather than raise; the caller's looks_like_text filter rejects it.
+        result = decode_book_bytes(bytes(range(256)))
+        assert isinstance(result, str) and "\x00" in result
+
+
+class TestLooksLikeText:
+    def test_plain_text(self):
+        assert looks_like_text("just words and punctuation")
+
+    def test_nul_rejected(self):
+        assert not looks_like_text("abc\x00def")
+
+
 class TestGetBookText:
     def test_reads_utf8_file(self, tmp_path):
         book = tmp_path / "book.txt"
@@ -77,12 +110,36 @@ class TestGetBookText:
             get_book_text(str(tmp_path / "nope.txt"))
         assert exc.value.code == 1
 
-    def test_non_utf8_file_exits(self, tmp_path):
+    def test_binary_file_exits(self, tmp_path):
+        # Genuinely binary (no BOM, decodes to NULs under latin-1).
         book = tmp_path / "binary.bin"
-        book.write_bytes(b"\xff\xfe\x00\x01")
+        book.write_bytes(b"\x00\x01\x02\x03\x00\x04")
         with pytest.raises(SystemExit) as exc:
             get_book_text(str(book))
         assert exc.value.code == 1
+
+    def test_utf16_with_bom_is_read(self, tmp_path):
+        book = tmp_path / "book.txt"
+        book.write_bytes("hello world".encode("utf-16"))
+        assert get_book_text(str(book)) == "hello world"
+
+    def test_utf16_be_with_bom_is_read(self, tmp_path):
+        # BE BOM (\xfe\xff) up front, then big-endian code units.
+        book = tmp_path / "book.txt"
+        book.write_bytes(b"\xfe\xff" + "hello world".encode("utf-16-be"))
+        assert get_book_text(str(book)) == "hello world"
+
+    def test_latin1_is_read(self, tmp_path):
+        # Only latin-1-safe characters: é (0xE9) is in the codec, an em-dash is not.
+        text = "café au lait - déjà vu"
+        book = tmp_path / "book.txt"
+        book.write_bytes(text.encode("latin-1"))
+        assert get_book_text(str(book)) == text
+
+    def test_utf8_bom_is_stripped(self, tmp_path):
+        book = tmp_path / "book.txt"
+        book.write_bytes("hello world".encode("utf-8-sig"))
+        assert get_book_text(str(book)) == "hello world"
 
     def test_empty_file_exits(self, tmp_path):
         book = tmp_path / "empty.txt"
