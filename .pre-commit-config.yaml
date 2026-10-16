@@ -1,0 +1,28 @@
+# Pre-commit hooks: lint + format with ruff, plus cheap hygiene checks.
+#
+# Install:
+#   pip install pre-commit
+#   pre-commit install          # hooks run on every `git commit`
+#
+# Run all hooks on every file once (to format the existing tree):
+#   pre-commit run --all-files
+#
+# Version pins: `ruff` rev matches ruff.toml's expectations. Bump both
+# together when upgrading.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]   # book files are git-ignored; guard the rest
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
