@@ -5,7 +5,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import decode_book_bytes, get_book_text, looks_like_text
+from main import (
+    compute_stats,
+    decode_book_bytes,
+    format_csv,
+    format_json,
+    format_text,
+    get_book_text,
+    looks_like_text,
+    parse_args,
+)
 from stats import get_char_count, get_most_common_words, get_num_words
 
 
@@ -151,4 +160,131 @@ class TestGetBookText:
     def test_directory_exits(self, tmp_path):
         with pytest.raises(SystemExit) as exc:
             get_book_text(str(tmp_path))
+        assert exc.value.code == 1
+
+
+SAMPLE = "The cat sat on the mat. The cat saw a rat. A rat and a cat sat together."
+
+
+class TestComputeStats:
+    def test_counts_all_three(self):
+        stats = compute_stats(SAMPLE, top_n=3)
+        assert stats["word_count"] == get_num_words(SAMPLE)
+        assert stats["char_count"] == get_char_count(SAMPLE)
+        assert stats["top_words"] == get_most_common_words(SAMPLE, 3)
+
+    def test_top_n_is_honoured(self):
+        stats = compute_stats(SAMPLE, top_n=2)
+        assert len(stats["top_words"]) == 2
+
+
+class TestFormatText:
+    def test_structure(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        lines = out.split("\n")
+        assert lines[0] == "============ BOOKBOT ============"
+        assert lines[-1] == "============= END ==============="
+        assert f"Found {get_num_words(SAMPLE)} total words" in out
+
+    def test_letter_percentages_sum_to_at_most_100(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        import re
+
+        pcts = [float(m) for m in re.findall(r"\((\d+\.\d+)%\)", out)]
+        assert 0 < sum(pcts) <= 100.0
+
+    def test_book_path_is_shown(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "books/foo.txt")
+        assert "books/foo.txt" in out
+
+
+class TestFormatJson:
+    def test_round_trips(self):
+        import json
+
+        stats = compute_stats(SAMPLE, top_n=3)
+        data = json.loads(format_json(stats, "book.txt"))
+        assert data["file"] == "book.txt"
+        assert data["word_count"] == stats["word_count"]
+        assert data["character_count"] == stats["char_count"]
+        # "the" and "cat" tie at the top; ties break alphabetically.
+        assert data["most_common_words"][0]["word"] == "cat"
+        assert all(set(w) == {"word", "count"} for w in data["most_common_words"])
+
+    def test_indentation_for_readability(self):
+        out = format_json(compute_stats(SAMPLE, top_n=1), "book.txt")
+        assert "\n  " in out  # indented, not single-line
+
+
+class TestFormatCsv:
+    def test_header_and_sections(self):
+        import csv
+        import io
+
+        out = format_csv(compute_stats(SAMPLE, top_n=3), "book.txt")
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0] == ["section", "key", "value"]
+        sections = {r[0] for r in rows[1:]}
+        assert sections == {"summary", "char", "top_word"}
+
+    def test_summary_rows(self):
+        import csv
+        import io
+
+        rows = list(
+            csv.reader(
+                io.StringIO(format_csv(compute_stats(SAMPLE, top_n=3), "book.txt"))
+            )
+        )
+        summary = {r[1]: r[2] for r in rows if r[0] == "summary"}
+        assert summary["file"] == "book.txt"
+        assert int(summary["word_count"]) == get_num_words(SAMPLE)
+
+    def test_char_rows_carry_all_characters(self):
+        import csv
+        import io
+
+        rows = list(
+            csv.reader(
+                io.StringIO(format_csv(compute_stats(SAMPLE, top_n=3), "book.txt"))
+            )
+        )
+        char_rows = {r[1]: int(r[2]) for r in rows if r[0] == "char"}
+        assert sum(char_rows.values()) == sum(get_char_count(SAMPLE).values())
+
+
+class TestParseArgs:
+    def test_defaults_to_text(self):
+        assert parse_args(["book.txt"]) == ("book.txt", "text")
+
+    def test_long_flag(self):
+        assert parse_args(["book.txt", "--format", "json"]) == ("book.txt", "json")
+
+    def test_short_flag(self):
+        assert parse_args(["book.txt", "-f", "csv"]) == ("book.txt", "csv")
+
+    def test_equals_form(self):
+        assert parse_args(["book.txt", "--format=json"]) == ("book.txt", "json")
+
+    def test_flag_before_path(self):
+        assert parse_args(["-f", "json", "book.txt"]) == ("book.txt", "json")
+
+    def test_unknown_format_exits(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["book.txt", "--format", "xml"])
+        assert exc.value.code == 2
+
+    def test_missing_format_value_exits(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["book.txt", "--format"])
+        assert exc.value.code == 2
+
+    def test_missing_path_shows_usage(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args([])
+        assert exc.value.code == 1
+
+    def test_too_many_paths_shows_usage(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["a.txt", "b.txt"])
         assert exc.value.code == 1
