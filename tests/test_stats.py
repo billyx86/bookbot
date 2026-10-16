@@ -1,12 +1,21 @@
-import sys
 import os
+import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from main import (
+    compute_stats,
+    decode_book_bytes,
+    format_csv,
+    format_json,
+    format_text,
+    get_book_text,
+    looks_like_text,
+    parse_args,
+)
 from stats import get_char_count, get_most_common_words, get_num_words
-from main import get_book_text
 
 
 class TestGetNumWords:
@@ -66,6 +75,39 @@ class TestGetMostCommonWords:
         assert len(top) == 3
 
 
+class TestDecodeBookBytes:
+    def test_utf8_passthrough(self):
+        assert decode_book_bytes(b"hello") == "hello"
+
+    def test_utf8_bom_stripped(self):
+        assert decode_book_bytes("hello".encode("utf-8-sig")) == "hello"
+
+    def test_utf16_le_bom(self):
+        # encode("utf-16") writes a BOM (native byte order) up front.
+        assert decode_book_bytes("hi".encode("utf-16")) == "hi"
+
+    def test_utf16_be_bom(self):
+        assert decode_book_bytes(b"\xfe\xff" + "hi".encode("utf-16-be")) == "hi"
+
+    def test_latin1_fallback(self):
+        raw = "café".encode("latin-1")
+        assert decode_book_bytes(raw) == "café"
+
+    def test_latin1_of_garbage_never_raises(self):
+        # latin-1 maps every byte, so this must return (NUL-laden) text
+        # rather than raise; the caller's looks_like_text filter rejects it.
+        result = decode_book_bytes(bytes(range(256)))
+        assert isinstance(result, str) and "\x00" in result
+
+
+class TestLooksLikeText:
+    def test_plain_text(self):
+        assert looks_like_text("just words and punctuation")
+
+    def test_nul_rejected(self):
+        assert not looks_like_text("abc\x00def")
+
+
 class TestGetBookText:
     def test_reads_utf8_file(self, tmp_path):
         book = tmp_path / "book.txt"
@@ -77,12 +119,36 @@ class TestGetBookText:
             get_book_text(str(tmp_path / "nope.txt"))
         assert exc.value.code == 1
 
-    def test_non_utf8_file_exits(self, tmp_path):
+    def test_binary_file_exits(self, tmp_path):
+        # Genuinely binary (no BOM, decodes to NULs under latin-1).
         book = tmp_path / "binary.bin"
-        book.write_bytes(b"\xff\xfe\x00\x01")
+        book.write_bytes(b"\x00\x01\x02\x03\x00\x04")
         with pytest.raises(SystemExit) as exc:
             get_book_text(str(book))
         assert exc.value.code == 1
+
+    def test_utf16_with_bom_is_read(self, tmp_path):
+        book = tmp_path / "book.txt"
+        book.write_bytes("hello world".encode("utf-16"))
+        assert get_book_text(str(book)) == "hello world"
+
+    def test_utf16_be_with_bom_is_read(self, tmp_path):
+        # BE BOM (\xfe\xff) up front, then big-endian code units.
+        book = tmp_path / "book.txt"
+        book.write_bytes(b"\xfe\xff" + "hello world".encode("utf-16-be"))
+        assert get_book_text(str(book)) == "hello world"
+
+    def test_latin1_is_read(self, tmp_path):
+        # Only latin-1-safe characters: é (0xE9) is in the codec, an em-dash is not.
+        text = "café au lait - déjà vu"
+        book = tmp_path / "book.txt"
+        book.write_bytes(text.encode("latin-1"))
+        assert get_book_text(str(book)) == text
+
+    def test_utf8_bom_is_stripped(self, tmp_path):
+        book = tmp_path / "book.txt"
+        book.write_bytes("hello world".encode("utf-8-sig"))
+        assert get_book_text(str(book)) == "hello world"
 
     def test_empty_file_exits(self, tmp_path):
         book = tmp_path / "empty.txt"
@@ -94,4 +160,131 @@ class TestGetBookText:
     def test_directory_exits(self, tmp_path):
         with pytest.raises(SystemExit) as exc:
             get_book_text(str(tmp_path))
+        assert exc.value.code == 1
+
+
+SAMPLE = "The cat sat on the mat. The cat saw a rat. A rat and a cat sat together."
+
+
+class TestComputeStats:
+    def test_counts_all_three(self):
+        stats = compute_stats(SAMPLE, top_n=3)
+        assert stats["word_count"] == get_num_words(SAMPLE)
+        assert stats["char_count"] == get_char_count(SAMPLE)
+        assert stats["top_words"] == get_most_common_words(SAMPLE, 3)
+
+    def test_top_n_is_honoured(self):
+        stats = compute_stats(SAMPLE, top_n=2)
+        assert len(stats["top_words"]) == 2
+
+
+class TestFormatText:
+    def test_structure(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        lines = out.split("\n")
+        assert lines[0] == "============ BOOKBOT ============"
+        assert lines[-1] == "============= END ==============="
+        assert f"Found {get_num_words(SAMPLE)} total words" in out
+
+    def test_letter_percentages_sum_to_at_most_100(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        import re
+
+        pcts = [float(m) for m in re.findall(r"\((\d+\.\d+)%\)", out)]
+        assert 0 < sum(pcts) <= 100.0
+
+    def test_book_path_is_shown(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "books/foo.txt")
+        assert "books/foo.txt" in out
+
+
+class TestFormatJson:
+    def test_round_trips(self):
+        import json
+
+        stats = compute_stats(SAMPLE, top_n=3)
+        data = json.loads(format_json(stats, "book.txt"))
+        assert data["file"] == "book.txt"
+        assert data["word_count"] == stats["word_count"]
+        assert data["character_count"] == stats["char_count"]
+        # "the" and "cat" tie at the top; ties break alphabetically.
+        assert data["most_common_words"][0]["word"] == "cat"
+        assert all(set(w) == {"word", "count"} for w in data["most_common_words"])
+
+    def test_indentation_for_readability(self):
+        out = format_json(compute_stats(SAMPLE, top_n=1), "book.txt")
+        assert "\n  " in out  # indented, not single-line
+
+
+class TestFormatCsv:
+    def test_header_and_sections(self):
+        import csv
+        import io
+
+        out = format_csv(compute_stats(SAMPLE, top_n=3), "book.txt")
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0] == ["section", "key", "value"]
+        sections = {r[0] for r in rows[1:]}
+        assert sections == {"summary", "char", "top_word"}
+
+    def test_summary_rows(self):
+        import csv
+        import io
+
+        rows = list(
+            csv.reader(
+                io.StringIO(format_csv(compute_stats(SAMPLE, top_n=3), "book.txt"))
+            )
+        )
+        summary = {r[1]: r[2] for r in rows if r[0] == "summary"}
+        assert summary["file"] == "book.txt"
+        assert int(summary["word_count"]) == get_num_words(SAMPLE)
+
+    def test_char_rows_carry_all_characters(self):
+        import csv
+        import io
+
+        rows = list(
+            csv.reader(
+                io.StringIO(format_csv(compute_stats(SAMPLE, top_n=3), "book.txt"))
+            )
+        )
+        char_rows = {r[1]: int(r[2]) for r in rows if r[0] == "char"}
+        assert sum(char_rows.values()) == sum(get_char_count(SAMPLE).values())
+
+
+class TestParseArgs:
+    def test_defaults_to_text(self):
+        assert parse_args(["book.txt"]) == ("book.txt", "text")
+
+    def test_long_flag(self):
+        assert parse_args(["book.txt", "--format", "json"]) == ("book.txt", "json")
+
+    def test_short_flag(self):
+        assert parse_args(["book.txt", "-f", "csv"]) == ("book.txt", "csv")
+
+    def test_equals_form(self):
+        assert parse_args(["book.txt", "--format=json"]) == ("book.txt", "json")
+
+    def test_flag_before_path(self):
+        assert parse_args(["-f", "json", "book.txt"]) == ("book.txt", "json")
+
+    def test_unknown_format_exits(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["book.txt", "--format", "xml"])
+        assert exc.value.code == 2
+
+    def test_missing_format_value_exits(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["book.txt", "--format"])
+        assert exc.value.code == 2
+
+    def test_missing_path_shows_usage(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args([])
+        assert exc.value.code == 1
+
+    def test_too_many_paths_shows_usage(self):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["a.txt", "b.txt"])
         assert exc.value.code == 1

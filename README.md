@@ -9,11 +9,45 @@ most common words.
 ## Usage
 
 ```bash
-python3 main.py <path_to_book>
+python3 main.py <path_to_book> [--format text|json|csv]
 ```
 
-Book files must be plain text (UTF-8). Missing, unreadable, binary or empty
-files produce a friendly error message instead of a traceback.
+Book files must be plain text. BookBot auto-detects the encoding —
+UTF-8 (with or without BOM), UTF-16 (with BOM), and latin-1 — so
+scanned books in any of those work out of the box. Missing, unreadable,
+binary or empty files produce a friendly error message instead of a
+traceback.
+
+### Output formats
+
+`--format` (or `-f`) picks how the report is printed. The default is
+`text` — the human-readable report shown above.
+
+- **`text`** (default) — the classic report for people.
+- **`json`** — a machine-readable object with `file`, `word_count`,
+  `character_count`, and `most_common_words`, for piping into scripts.
+- **`csv`** — a flat `section,key,value` table (a `summary` block, one
+  `char` row per character, one `top_word` row per most-common word) for
+  spreadsheets.
+
+```bash
+$ python3 main.py books/frankenstein.txt --format json
+{
+  "file": "books/frankenstein.txt",
+  "word_count": 78115,
+  "character_count": { ... },
+  "most_common_words": [ { "word": "the", "count": 8171 }, ... ]
+}
+
+$ python3 main.py books/frankenstein.txt -f csv
+section,key,value
+summary,file,books/frankenstein.txt
+summary,word_count,78115
+char,e,108652
+...
+top_word,the,8171
+...
+```
 
 ### Example
 
@@ -55,7 +89,11 @@ bookbot
 ├── main.py              # CLI entry point: reads the book, prints the report
 ├── stats.py             # Pure functions: word count, char count, top words
 ├── tests/
-│   └── test_stats.py    # pytest suite (19 tests)
+│   └── test_stats.py    # pytest suite (50 tests)
+├── ruff.toml            # Lint + format configuration
+├── .pre-commit-config.yaml
+├── .github/workflows/
+│   └── ci.yml           # lint job + test matrix (3.11 / 3.12)
 ├── .gitignore
 └── README.md
 ```
@@ -71,8 +109,26 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests/ -v
 ```
 
+### Lint and format
+
+BookBot uses [ruff](https://docs.astral.sh/ruff/) for both linting and
+formatting. CI runs it on every push/PR, and a pre-commit config wires it
+into local commits:
+
+```bash
+# One-off (matches CI)
+.venv/bin/pip install ruff
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+
+# Or hook it into git (runs on every commit)
+.venv/bin/pip install pre-commit
+.venv/bin/pre-commit install
+.venv/bin/pre-commit run --all-files   # format the existing tree once
+```
+
 ## Ideas
 
-- [ ] `--json` flag to machine-readable output
+- [x] `--json` flag for machine-readable output (also `--csv`)
 - [ ] Average word length and sentence count
 - [ ] Read EPUB files (needs `ebooklib`)

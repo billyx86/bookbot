@@ -1,0 +1,33 @@
+# Ruff configuration (lint + format).
+#
+# - The codebase is plain, readable Python; line length is a bit over the
+#   79-char classic so docstrings and f-strings stay on one line where they
+#   fit naturally.
+# - Target the CI matrix floor (Python 3.11).
+# - `E501` (line-too-long) is owned by the formatter, so the linter skips it.
+# - `tests/` is part of the project and is checked like everything else.
+
+target-version = "py311"
+line-length = 88
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import ordering)
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line length is enforced by `ruff format`
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]  # assert False in tests is fine
+
+[format]
+# Match the existing codebase: double quotes, no forced trailing commas in
+# a way that fights readability.
+quote-style = "double"

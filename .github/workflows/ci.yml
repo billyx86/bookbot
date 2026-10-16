@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Pin to the same ruff the pre-commit config and local dev use.
+      - name: Install ruff
+        run: pip install "ruff==0.17.1"
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
