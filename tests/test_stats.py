@@ -38,6 +38,19 @@ class TestGetCharCount:
     def test_basic_counts(self):
         assert get_char_count("aab") == {"a": 2, "b": 1}
 
+    def test_matches_reference_counting(self):
+        # #13: the implementation moved to collections.Counter; the
+        # public contract is a char->count mapping, and every consumer
+        # (sum(.values()), .items(), membership) must behave exactly as
+        # with a plain dict.
+        text = "The quick brown fox"
+        expected = {}
+        for ch in text.lower():
+            expected[ch] = expected.get(ch, 0) + 1
+        counts = get_char_count(text)
+        assert dict(counts) == expected
+        assert sum(counts.values()) == len(text)
+
     def test_case_insensitive(self):
         assert get_char_count("Aa") == {"a": 2}
 
