@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 
 import pytest
@@ -107,6 +108,34 @@ class TestLooksLikeText:
     def test_nul_rejected(self):
         assert not looks_like_text("abc\x00def")
 
+    def test_empty_string_is_text(self):
+        # get_book_text runs the empty check afterwards; the gate must not
+        # mask it with a false negative.
+        assert looks_like_text("")
+
+    def test_normal_whitespace_accepted(self):
+        assert looks_like_text("line one\nline two\r\nline three\ttabbed")
+
+    def test_sparse_controls_below_threshold_accepted(self):
+        # A stray control char or two in a long text is fine.
+        text = "word " * 500 + "\x0b"
+        assert looks_like_text(text)
+
+    def test_nul_free_binary_rejected(self):
+        # The #11 bug: binary whose bytes contain no 0x00 decodes
+        # losslessly under latin-1 to mostly control characters.
+        blob = bytes(random.choice(range(1, 256)) for _ in range(4096))
+        assert not looks_like_text(blob.decode("latin-1"))
+
+    def test_dense_control_run_rejected(self):
+        text = "ok " * 40 + "\x0e\x0f\x10" * 400
+        assert not looks_like_text(text)
+
+    def test_c1_block_heavy_text_rejected(self):
+        # latin-1 decode of 0x80-0x9F yields C1 controls, not printable text.
+        text = "\x80\x81\x82" * 300 + "hello"
+        assert not looks_like_text(text)
+
 
 class TestGetBookText:
     def test_reads_utf8_file(self, tmp_path):
@@ -126,6 +155,18 @@ class TestGetBookText:
         with pytest.raises(SystemExit) as exc:
             get_book_text(str(book))
         assert exc.value.code == 1
+
+    def test_nul_free_binary_exits(self, tmp_path, capsys):
+        # #11 regression: binary whose bytes contain no NUL byte used to
+        # pass the gate and produce a garbage report. It must now exit
+        # with the friendly not-a-text-file error.
+        blob = bytes(random.choice(range(1, 256)) for _ in range(4096))
+        book = tmp_path / "blob.bin"
+        book.write_bytes(blob)
+        with pytest.raises(SystemExit) as exc:
+            get_book_text(str(book))
+        assert exc.value.code == 1
+        assert "not a text file" in capsys.readouterr().out
 
     def test_utf16_with_bom_is_read(self, tmp_path):
         book = tmp_path / "book.txt"

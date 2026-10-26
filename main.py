@@ -8,9 +8,37 @@ from stats import get_char_count, get_most_common_words, get_num_words
 USAGE = "Usage: python3 main.py <path_to_book> [--format text|json|csv]"
 
 
+# Characters that essentially never appear in real plain text: the C0
+# control codes (other than tab, newline and carriage return) plus the
+# C1 block.
+_SUSPICIOUS_CODEPOINTS = (
+    set(range(0x00, 0x09))  # NUL .. backspace
+    | {0x0B, 0x0C}  # vertical tab, form feed
+    | set(range(0x0E, 0x20))  # shift-out .. unit separator
+    | {0x7F}  # DEL
+    | set(range(0x80, 0xA0))  # C1 controls (latin-1 decode of 0x80-0x9F)
+)
+_SUSPICIOUS_DELETE_TABLE = str.maketrans({cp: None for cp in _SUSPICIOUS_CODEPOINTS})
+# More than this fraction of suspicious characters => almost certainly binary.
+_SUSPICIOUS_FRACTION_LIMIT = 0.01
+
+
 def looks_like_text(text):
-    """Heuristic: real text books never contain NUL bytes."""
-    return "\x00" not in text
+    """Heuristic: is this decoded text a real book, or binary garbage?
+
+    Two stages. NUL bytes are rejected outright — real text books never
+    contain them (fast path). Then a control-character scan: genuine
+    books carry no C0/C1 controls beyond the usual whitespace, whereas a
+    binary file whose bytes happen to contain no NUL byte (some JPEGs,
+    PNGs, compressed blobs) decodes losslessly under latin-1 to a text
+    that is mostly control characters and is rejected here.
+    """
+    if not text:
+        return True
+    if "\x00" in text:
+        return False
+    kept = text.translate(_SUSPICIOUS_DELETE_TABLE)
+    return len(kept) >= (1.0 - _SUSPICIOUS_FRACTION_LIMIT) * len(text)
 
 
 def decode_book_bytes(raw):
@@ -20,7 +48,8 @@ def decode_book_bytes(raw):
     mark is present, and finally latin-1, which maps every byte and so
     never raises. Callers should still run the result through
     ``looks_like_text`` — the chain always returns *something*, and
-    genuinely binary files decode to NULs under latin-1.
+    genuinely binary files decode to NULs or control characters under
+    latin-1.
     """
     try:
         return raw.decode("utf-8-sig")
