@@ -1,3 +1,6 @@
+from collections import Counter
+
+
 def get_num_words(text):
     """Return the total number of words in the text.
 
@@ -10,13 +13,12 @@ def get_char_count(text):
     """Return a dict mapping each character to its occurrence count.
 
     The text is normalised to lowercase first.
-    """
-    char_count_dict = {}
-    char_list = list(text.lower())
-    for char in char_list:
-        char_count_dict[char] = char_count_dict.get(char, 0) + 1
 
-    return char_count_dict
+    Counting runs through ``collections.Counter``, which counts in C —
+    several times faster than a hand-rolled per-character loop on
+    multi-megabyte books.
+    """
+    return Counter(text.lower())
 
 
 def get_most_common_words(text, n=10):
