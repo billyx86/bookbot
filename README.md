@@ -16,7 +16,9 @@ Book files must be plain text. BookBot auto-detects the encoding —
 UTF-8 (with or without BOM), UTF-16 (with BOM), and latin-1 — so
 scanned books in any of those work out of the box. Missing, unreadable,
 binary or empty files produce a friendly error message instead of a
-traceback.
+traceback. Binary detection is two-stage: NUL bytes are rejected
+outright, and a file that is mostly control characters (a binary blob
+whose bytes happen to contain no NUL) is rejected the same way.
 
 ### Output formats
 
@@ -89,7 +91,8 @@ bookbot
 ├── main.py              # CLI entry point: reads the book, prints the report
 ├── stats.py             # Pure functions: word count, char count, top words
 ├── tests/
-│   └── test_stats.py    # pytest suite (50 tests)
+│   ├── test_stats.py    # pytest suite: stats, decoding, formatters
+│   └── test_cli.py      # pytest suite: parse_args, main(), entry point
 ├── ruff.toml            # Lint + format configuration
 ├── .pre-commit-config.yaml
 ├── .github/workflows/
