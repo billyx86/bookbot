@@ -309,19 +309,19 @@ class TestFormatCsv:
 
 class TestParseArgs:
     def test_defaults_to_text(self):
-        assert parse_args(["book.txt"]) == ("book.txt", "text")
+        assert parse_args(["book.txt"]) == ("book.txt", "text", 10)
 
     def test_long_flag(self):
-        assert parse_args(["book.txt", "--format", "json"]) == ("book.txt", "json")
+        assert parse_args(["book.txt", "--format", "json"]) == ("book.txt", "json", 10)
 
     def test_short_flag(self):
-        assert parse_args(["book.txt", "-f", "csv"]) == ("book.txt", "csv")
+        assert parse_args(["book.txt", "-f", "csv"]) == ("book.txt", "csv", 10)
 
     def test_equals_form(self):
-        assert parse_args(["book.txt", "--format=json"]) == ("book.txt", "json")
+        assert parse_args(["book.txt", "--format=json"]) == ("book.txt", "json", 10)
 
     def test_flag_before_path(self):
-        assert parse_args(["-f", "json", "book.txt"]) == ("book.txt", "json")
+        assert parse_args(["-f", "json", "book.txt"]) == ("book.txt", "json", 10)
 
     def test_unknown_format_exits(self):
         with pytest.raises(SystemExit) as exc:

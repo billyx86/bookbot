@@ -5,7 +5,7 @@ import sys
 
 from stats import get_char_count, get_most_common_words, get_num_words
 
-USAGE = "Usage: python3 main.py <path_to_book> [--format text|json|csv]"
+USAGE = "Usage: python3 main.py <path_to_book> [--format text|json|csv] [--top N]"
 
 
 # Characters that essentially never appear in real plain text: the C0
@@ -177,17 +177,37 @@ def format_csv(stats, book):
     return buf.getvalue().rstrip("\n")
 
 
+def _parse_top_n(value):
+    """Parse a ``--top`` value into a positive int, or exit(2) with a message.
+
+    ``"0"``, negatives, floats (``"3.5"``) and non-numeric strings are all
+    rejected with a friendly error, matching the existing parse_args style.
+    """
+    try:
+        # Reject "3.5" / " 3 " / "+3" / "3_0" — accept only a bare integer.
+        n = int(value)
+    except (ValueError, TypeError):
+        print(f"Error: --top needs a positive integer, got '{value}'.")
+        sys.exit(2)
+    if n <= 0:
+        print(f"Error: --top needs a positive integer, got '{value}'.")
+        sys.exit(2)
+    return n
+
+
 def parse_args(argv):
     """Parse CLI arguments.
 
-    Returns ``(book_path, fmt)`` where fmt is one of ``text`` / ``json`` /
-    ``csv``. Exits with a friendly message on bad usage.
+    Returns ``(book_path, fmt, top_n)`` where fmt is one of ``text`` /
+    ``json`` / ``csv`` and top_n is the most-common-words count (default 10,
+    see ``--top`` / ``-t``). Exits with a friendly message on bad usage.
     """
     if "-h" in argv or "--help" in argv:
         print(USAGE)
         sys.exit(0)
 
     fmt = "text"
+    top_n = 10
     positional = []
     i = 0
     while i < len(argv):
@@ -200,6 +220,14 @@ def parse_args(argv):
             fmt = argv[i]
         elif arg.startswith("--format="):
             fmt = arg.split("=", 1)[1]
+        elif arg in ("--top", "-t"):
+            i += 1
+            if i >= len(argv):
+                print("Error: --top needs a value (a positive integer).")
+                sys.exit(2)
+            top_n = _parse_top_n(argv[i])
+        elif arg.startswith("--top="):
+            top_n = _parse_top_n(arg.split("=", 1)[1])
         else:
             positional.append(arg)
         i += 1
@@ -210,13 +238,13 @@ def parse_args(argv):
     if len(positional) != 1:
         print(USAGE)
         sys.exit(1)
-    return positional[0], fmt
+    return positional[0], fmt, top_n
 
 
 def main():
-    book, fmt = parse_args(sys.argv[1:])
+    book, fmt, top_n = parse_args(sys.argv[1:])
     book_contents = get_book_text(book)
-    stats = compute_stats(book_contents, top_n=10)
+    stats = compute_stats(book_contents, top_n=top_n)
 
     if fmt == "json":
         print(format_json(stats, book))
