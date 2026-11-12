@@ -117,6 +117,107 @@ class TestMainCsvFormat:
         assert int(summary["word_count"]) == 11
 
 
+class TestTopNFlag:
+    """#15: ``--top N`` / ``-t N`` selects the most-common-words count."""
+
+    def test_top_flag_long(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["main.py", book, "--top", "3", "--format", "json"]
+        )
+        main()
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["most_common_words"]) == 3
+        assert data["most_common_words"][0] == {"word": "the", "count": 3}
+
+    def test_top_flag_short(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["main.py", book, "-t", "1", "--format", "json"]
+        )
+        main()
+        data = json.loads(capsys.readouterr().out)
+        assert data["most_common_words"] == [{"word": "the", "count": 3}]
+
+    def test_top_equals_form(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book, "--top=2", "-f", "json"])
+        main()
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["most_common_words"]) == 2
+
+    def test_top_default_is_ten(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book, "--format", "json"])
+        main()
+        data = json.loads(capsys.readouterr().out)
+        # The sample has only 7 distinct words, so the default top_n=10
+        # returns all of them.
+        assert len(data["most_common_words"]) == 7
+
+    def test_top_reflected_in_csv(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book, "--top", "3", "-f", "csv"])
+        main()
+        rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
+        top_word_rows = [r for r in rows if r[0] == "top_word"]
+        assert len(top_word_rows) == 3
+        assert top_word_rows[0] == ["top_word", "the", "3"]
+
+    def test_top_reflected_in_text(self, tmp_path, monkeypatch, capsys):
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book, "--top", "2"])
+        main()
+        out = capsys.readouterr().out
+        section = out.split("-------- Most Common Words ------")[1].strip()
+        assert section.splitlines()[0] == "the: 3"
+        assert section.splitlines()[1] == "cat: 2"
+
+    def test_top_returns_in_tuple(self):
+        assert parse_args(["book.txt", "--top", "5"]) == ("book.txt", "text", 5)
+        assert parse_args(["book.txt", "-t", "7", "--format", "json"]) == (
+            "book.txt",
+            "json",
+            7,
+        )
+        assert parse_args(["book.txt"]) == ("book.txt", "text", 10)
+
+    def test_top_zero_exits_two(self, tmp_path, capsys):
+        book = _write_book(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            parse_args([book, "--top", "0"])
+        assert exc.value.code == 2
+        assert "positive integer" in capsys.readouterr().out
+
+    def test_top_negative_exits_two(self, tmp_path, capsys):
+        book = _write_book(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            parse_args([book, "--top", "-2"])
+        assert exc.value.code == 2
+        assert "positive integer" in capsys.readouterr().out
+
+    def test_top_non_integer_exits_two(self, tmp_path, capsys):
+        book = _write_book(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            parse_args([book, "--top", "abc"])
+        assert exc.value.code == 2
+        assert "positive integer" in capsys.readouterr().out
+
+    def test_top_float_exits_two(self, tmp_path, capsys):
+        book = _write_book(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            parse_args([book, "--top", "3.5"])
+        assert exc.value.code == 2
+        assert "positive integer" in capsys.readouterr().out
+
+    def test_top_missing_value_exits_two(self, tmp_path, capsys):
+        book = _write_book(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            parse_args([book, "--top"])
+        assert exc.value.code == 2
+        assert "needs a value" in capsys.readouterr().out
+
+
 class TestMainErrorPaths:
     def test_missing_file_exits_one_with_message(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(sys, "argv", ["main.py", str(tmp_path / "nope.txt")])
@@ -184,3 +285,17 @@ class TestEntryPoint:
         result = _run_cli(book, "--format", "xml")
         assert result.returncode == 2
         assert "unknown format" in result.stdout
+
+    def test_top_flag_via_subprocess(self, tmp_path):
+        book = _write_book(tmp_path)
+        result = _run_cli(book, "--top", "1", "--format", "json")
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["most_common_words"] == [{"word": "the", "count": 3}]
+
+    def test_top_bad_value_via_subprocess(self, tmp_path):
+        book = _write_book(tmp_path)
+        result = _run_cli(book, "--top", "0")
+        assert result.returncode == 2
+        assert "positive integer" in result.stdout
+        assert "Traceback" not in result.stderr

@@ -9,7 +9,7 @@ most common words.
 ## Usage
 
 ```bash
-python3 main.py <path_to_book> [--format text|json|csv]
+python3 main.py <path_to_book> [--format text|json|csv] [--top N]
 ```
 
 Book files must be plain text. BookBot auto-detects the encoding —
@@ -49,6 +49,17 @@ char,e,108652
 ...
 top_word,the,8171
 ...
+```
+
+### Top words count
+
+`--top N` (or `-t N`) chooses how many most-common words the report
+includes. The default is `10`. It accepts a positive integer; zero,
+negatives and non-numeric values are rejected with a friendly error.
+Works with all three output formats.
+
+```bash
+$ python3 main.py books/frankenstein.txt --top 3
 ```
 
 ### Example
@@ -133,5 +144,6 @@ into local commits:
 ## Ideas
 
 - [x] `--json` flag for machine-readable output (also `--csv`)
+- [x] `--top N` flag for the most-common-words count
 - [ ] Average word length and sentence count
 - [ ] Read EPUB files (needs `ebooklib`)
