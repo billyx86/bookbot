@@ -5,7 +5,12 @@ import sys
 
 from stats import get_char_count, get_most_common_words, get_num_words
 
-USAGE = "Usage: python3 main.py <path_to_book> [--format text|json|csv] [--top N]"
+USAGE = (
+    "Usage: python3 main.py <path_to_book | - > [--format text|json|csv] "
+    "[--top N] [--stdin]\n"
+    "  Use '-' or --stdin to read the book from standard input "
+    "(e.g. 'zcat book.txt.gz | python3 main.py -')."
+)
 
 
 # Characters that essentially never appear in real plain text: the C0
@@ -45,10 +50,15 @@ def decode_book_bytes(raw):
     """Decode a book's raw bytes into text.
 
     Tries UTF-8 (with optional BOM) first, then UTF-16 when the byte order
-    mark is present, and finally latin-1, which maps every byte and so
-    never raises. Callers should still run the result through
-    ``looks_like_text`` — the chain always returns *something*, and
-    genuinely binary files decode to NULs or control characters under
+    mark is present, then cp1252 (the dominant legacy Windows encoding —
+    its smart quotes, em-dashes and bullets decode to real Unicode rather
+    than the C1 control characters a latin-1 read produces, which would
+    trip ``looks_like_text``), and finally latin-1, which maps every byte
+    and so never raises. cp1252 rejects the five codepoints it leaves
+    undefined (0x81/8D/8F/90/9D), so bytes it cannot map still fall
+    through to latin-1 unchanged. Callers should still run the result
+    through ``looks_like_text`` — the chain always returns *something*,
+    and genuinely binary files decode to NULs or control characters under
     latin-1.
     """
     try:
@@ -60,44 +70,65 @@ def decode_book_bytes(raw):
             return raw.decode("utf-16")
         except UnicodeDecodeError:
             pass
+    try:
+        return raw.decode("cp1252")
+    except UnicodeDecodeError:
+        pass
     return raw.decode("latin-1")
 
 
-def get_book_text(filepath):
-    """Read the book file and return its contents.
+def get_book_bytes(source, filepath):
+    """Return the book's decoded text, reading from ``filepath`` (a path)
+    or from standard input when ``source`` is ``"-"`` (#18).
 
-    Exits with a friendly error message if the file is missing,
-    unreadable, not a text file, or empty. Encodings: UTF-8 (with or
-    without BOM), UTF-16 (with BOM), and latin-1 as a last resort —
-    see ``decode_book_bytes``.
+    Both paths go through the same decode + binary-gate + empty check, so a
+    piped byte stream (``cat book | bookbot -`` or ``zcat book.gz |
+    bookbot --stdin``) is treated exactly like a file: the same encodings
+    apply and a binary/empty stream is refused with a friendly message
+    instead of a traceback. ``filepath`` is ignored for stdin.
     """
-    try:
-        with open(filepath, "rb") as f:
-            raw = f.read()
-    except FileNotFoundError:
-        print(f"Error: could not find '{filepath}'. Check the path and try again.")
-        sys.exit(1)
-    except IsADirectoryError:
-        print(f"Error: '{filepath}' is a directory, not a file.")
-        sys.exit(1)
-    except PermissionError:
-        print(f"Error: no permission to read '{filepath}'.")
-        sys.exit(1)
+    if source == "-":
+        raw = sys.stdin.buffer.read()
+        label = "(stdin)"
+    else:
+        try:
+            with open(filepath, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            print(f"Error: could not find '{filepath}'. Check the path and try again.")
+            sys.exit(1)
+        except IsADirectoryError:
+            print(f"Error: '{filepath}' is a directory, not a file.")
+            sys.exit(1)
+        except PermissionError:
+            print(f"Error: no permission to read '{filepath}'.")
+            sys.exit(1)
+        label = filepath
 
     file_contents = decode_book_bytes(raw)
 
     if not looks_like_text(file_contents):
         print(
-            f"Error: '{filepath}' is not a text file. "
-            "BookBot only reads plain text books."
+            f"Error: '{label}' is not a text file. BookBot only reads plain text books."
         )
         sys.exit(1)
 
     if not file_contents.strip():
-        print(f"Error: '{filepath}' is empty. Nothing to count.")
+        print(f"Error: '{label}' is empty. Nothing to count.")
         sys.exit(1)
 
     return file_contents
+
+
+def get_book_text(filepath):
+    """Read the book file and return its contents.
+
+    Thin file-path wrapper over ``get_book_bytes`` (which also handles the
+    ``"-"`` stdin source). Encodings: UTF-8 (with or without BOM), UTF-16
+    (with BOM), cp1252, and latin-1 as a last resort — see
+    ``decode_book_bytes``.
+    """
+    return get_book_bytes(filepath, filepath)
 
 
 def compute_stats(text, top_n=10):
@@ -198,9 +229,11 @@ def _parse_top_n(value):
 def parse_args(argv):
     """Parse CLI arguments.
 
-    Returns ``(book_path, fmt, top_n)`` where fmt is one of ``text`` /
-    ``json`` / ``csv`` and top_n is the most-common-words count (default 10,
-    see ``--top`` / ``-t``). Exits with a friendly message on bad usage.
+    Returns ``(book_path, fmt, top_n)`` where ``book_path`` is the file to
+    read or the ``"-"`` sentinel for standard input (select ``"-"`` or
+    ``--stdin``), ``fmt`` is one of ``text`` / ``json`` / ``csv`` and
+    ``top_n`` is the most-common-words count (default 10, see ``--top`` /
+    ``-t``). Exits with a friendly message on bad usage.
     """
     if "-h" in argv or "--help" in argv:
         print(USAGE)
@@ -208,6 +241,7 @@ def parse_args(argv):
 
     fmt = "text"
     top_n = 10
+    stdin_requested = False
     positional = []
     i = 0
     while i < len(argv):
@@ -228,6 +262,8 @@ def parse_args(argv):
             top_n = _parse_top_n(argv[i])
         elif arg.startswith("--top="):
             top_n = _parse_top_n(arg.split("=", 1)[1])
+        elif arg == "--stdin":
+            stdin_requested = True
         else:
             positional.append(arg)
         i += 1
@@ -235,23 +271,34 @@ def parse_args(argv):
     if fmt not in ("text", "json", "csv"):
         print(f"Error: unknown format '{fmt}'. Choose from: text, json, csv.")
         sys.exit(2)
-    if len(positional) != 1:
-        print(USAGE)
-        sys.exit(1)
-    return positional[0], fmt, top_n
+
+    if stdin_requested:
+        # --stdin is a source, not a wildcard: it must be the only source.
+        if positional:
+            print(USAGE)
+            sys.exit(1)
+        book_path = "-"
+    else:
+        # A bare "-" positional also means stdin (convention, e.g. zcat).
+        if len(positional) != 1:
+            print(USAGE)
+            sys.exit(1)
+        book_path = positional[0]
+    return book_path, fmt, top_n
 
 
 def main():
     book, fmt, top_n = parse_args(sys.argv[1:])
-    book_contents = get_book_text(book)
+    book_contents = get_book_bytes(book, book if book != "-" else None)
+    label = "(stdin)" if book == "-" else book
     stats = compute_stats(book_contents, top_n=top_n)
 
     if fmt == "json":
-        print(format_json(stats, book))
+        print(format_json(stats, label))
     elif fmt == "csv":
-        print(format_csv(stats, book))
+        print(format_csv(stats, label))
     else:
-        print(format_text(stats, book))
+        print(format_text(stats, label))
 
 
 if __name__ == "__main__":

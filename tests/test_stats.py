@@ -1,3 +1,4 @@
+import io
 import os
 import random
 import sys
@@ -12,6 +13,7 @@ from main import (
     format_csv,
     format_json,
     format_text,
+    get_book_bytes,
     get_book_text,
     looks_like_text,
     parse_args,
@@ -113,6 +115,36 @@ class TestDecodeBookBytes:
         result = decode_book_bytes(bytes(range(256)))
         assert isinstance(result, str) and "\x00" in result
 
+    def test_cp1252_smart_quotes_decoded(self):
+        # #17: cp1252 smart quotes (bytes 0x93/0x94) must decode to real
+        # Unicode, not the C1 controls the latin-1 fallback used to produce.
+        raw = b"He said \x93hello\x94 and left."
+        assert decode_book_bytes(raw) == "He said \u201chello\u201d and left."
+
+    def test_cp1252_em_dash_and_bullet(self):
+        # em-dash 0x97 and bullet 0x95 — the cp1252 punctuation a real
+        # legacy .txt book is full of.
+        raw = b"The end \x97 new \x95 1999"
+        assert decode_book_bytes(raw) == "The end \u2014 new \u2022 1999"
+
+    def test_cp1252_undefined_byte_falls_to_latin1(self):
+        # 0x90 is undefined in cp1252, so a byte cp1252 cannot map still
+        # lands in the latin-1 fallback (never raises, same character).
+        raw = b"\x90"
+        assert decode_book_bytes(raw) == "\x90"
+
+    def test_cp1252_text_passes_text_gate(self):
+        # The payoff of #17: decoded smart quotes no longer trip the
+        # C1-control binary scan that used to reject the whole file.
+        raw = b"He said \x93hello\x94 and left the room."
+        assert looks_like_text(decode_book_bytes(raw))
+
+    def test_latin1_identical_bytes_still_fine(self):
+        # 0xE9 (é) maps identically in cp1252 and latin-1, so the existing
+        # fallback path returns the same character once cp1252 is first.
+        raw = "café".encode("latin-1")
+        assert decode_book_bytes(raw) == "café"
+
 
 class TestLooksLikeText:
     def test_plain_text(self):
@@ -198,6 +230,17 @@ class TestGetBookText:
         book = tmp_path / "book.txt"
         book.write_bytes(text.encode("latin-1"))
         assert get_book_text(str(book)) == text
+
+    def test_cp1252_book_is_read(self, tmp_path, capsys):
+        # #17: a real cp1252 book (smart quotes, em-dash, bullet) decodes to
+        # proper Unicode and passes the text gate — no "not a text file" error.
+        raw = b"He said \x93hello,\x94 the end \x97 a \x95 list."
+        book = tmp_path / "book.txt"
+        book.write_bytes(raw)
+        assert (
+            get_book_text(str(book))
+            == "He said \u201chello,\u201d the end \u2014 a \u2022 list."
+        )
 
     def test_utf8_bom_is_stripped(self, tmp_path):
         book = tmp_path / "book.txt"
@@ -342,3 +385,81 @@ class TestParseArgs:
         with pytest.raises(SystemExit) as exc:
             parse_args(["a.txt", "b.txt"])
         assert exc.value.code == 1
+
+
+class TestStdinArgs:
+    """#18: `-` / `--stdin` select stdin as the book source."""
+
+    def test_dash_is_stdin_source(self):
+        assert parse_args(["-"]) == ("-", "text", 10)
+
+    def test_stdin_flag(self):
+        assert parse_args(["--stdin"]) == ("-", "text", 10)
+
+    def test_stdin_with_format_and_top(self):
+        assert parse_args(["-", "--format", "json", "--top", "3"]) == (
+            "-",
+            "json",
+            3,
+        )
+
+    def test_stdin_flag_equals_form(self):
+        assert parse_args(["--stdin", "--format=csv"]) == ("-", "csv", 10)
+
+    def test_stdin_flag_before_format_value(self):
+        assert parse_args(["--stdin", "-f", "json"]) == ("-", "json", 10)
+
+    def test_dash_plus_file_still_usage_error(self):
+        # Two sources is still a usage error; stdin is a source, not a
+        # wildcard.
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["-", "book.txt"])
+        assert exc.value.code == 1
+
+
+class TestGetBookBytes:
+    """#18: the shared read path (file path OR stdin bytes)."""
+
+    @staticmethod
+    def _fake_stdin(data):
+        """An object with a ``.buffer`` exposing ``data`` as a byte stream,
+        mimicking ``sys.stdin`` when a pipe is attached."""
+
+        class _Stdin:
+            buffer = io.BytesIO(data)
+
+        return _Stdin()
+
+    def test_reads_a_file(self, tmp_path):
+        book = tmp_path / "book.txt"
+        book.write_bytes(b"hello world")
+        assert get_book_bytes("book.txt", str(book)) == "hello world"
+
+    def test_reads_stdin_bytes(self, monkeypatch):
+        # Source "-" with stdin patched: the exact bytes the pipe handed
+        # over, through the same decode + gate chain as a file.
+        monkeypatch.setattr(sys, "stdin", self._fake_stdin(b"hello world"))
+        assert get_book_bytes("-", None) == "hello world"
+
+    def test_stdin_utf8(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", self._fake_stdin("café".encode()))
+        assert get_book_bytes("-", None) == "café"
+
+    def test_stdin_cp1252(self, monkeypatch):
+        # #17 + #18 intersect: a cp1252 smart-quote stream decodes properly.
+        monkeypatch.setattr(sys, "stdin", self._fake_stdin(b"he said \x93hi\x94"))
+        assert get_book_bytes("-", None) == "he said \u201chi\u201d"
+
+    def test_stdin_binary_refused(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", self._fake_stdin(b"\x00\x01\x02\x03"))
+        with pytest.raises(SystemExit) as exc:
+            get_book_bytes("-", None)
+        assert exc.value.code == 1
+        assert "not a text file" in capsys.readouterr().out
+
+    def test_stdin_empty_refused(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", self._fake_stdin(b"   \n"))
+        with pytest.raises(SystemExit) as exc:
+            get_book_bytes("-", None)
+        assert exc.value.code == 1
+        assert "empty" in capsys.readouterr().out.lower()
