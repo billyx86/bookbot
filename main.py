@@ -3,7 +3,13 @@ import io
 import json
 import sys
 
-from stats import get_char_count, get_most_common_words, get_num_words
+from stats import (
+    get_avg_word_length,
+    get_char_count,
+    get_most_common_words,
+    get_num_words,
+    get_sentence_count,
+)
 
 USAGE = (
     "Usage: python3 main.py <path_to_book | - > [--format text|json|csv] "
@@ -139,6 +145,8 @@ def compute_stats(text, top_n=10):
     """
     return {
         "word_count": get_num_words(text),
+        "avg_word_length": get_avg_word_length(text),
+        "sentence_count": get_sentence_count(text),
         "char_count": get_char_count(text),
         "top_words": get_most_common_words(text, top_n),
     }
@@ -158,6 +166,9 @@ def format_text(stats, book):
         f"Analyzing book found at {book}...",
         "----------- Word Count ----------",
         f"Found {stats['word_count']} total words",
+        f"Average word length: {stats['avg_word_length']:.2f}",
+        "------ Sentence Statistics ------",
+        f"Sentence count: {stats['sentence_count']}",
         "--------- Character Count -------",
     ]
     for char in dict(
@@ -180,6 +191,8 @@ def format_json(stats, book):
         {
             "file": book,
             "word_count": stats["word_count"],
+            "avg_word_length": stats["avg_word_length"],
+            "sentence_count": stats["sentence_count"],
             "character_count": stats["char_count"],
             "most_common_words": [
                 {"word": word, "count": count} for word, count in stats["top_words"]
@@ -192,15 +205,18 @@ def format_json(stats, book):
 def format_csv(stats, book):
     """Render the report as a flat section/key/value table for spreadsheets.
 
-    Every row is ``section,key,value``: ``summary`` for the file path and
-    word count, one ``char`` row per character (all of them, so downstream
-    tools can filter to letters), one ``top_word`` row per most-common word.
+    Every row is ``section,key,value``: ``summary`` for the file path,
+    word count, average word length and sentence count, one ``char`` row
+    per character (all of them, so downstream tools can filter to
+    letters), one ``top_word`` row per most-common word.
     """
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
     writer.writerow(["section", "key", "value"])
     writer.writerow(["summary", "file", book])
     writer.writerow(["summary", "word_count", stats["word_count"]])
+    writer.writerow(["summary", "avg_word_length", stats["avg_word_length"]])
+    writer.writerow(["summary", "sentence_count", stats["sentence_count"]])
     for char, count in stats["char_count"].items():
         writer.writerow(["char", char, count])
     for word, count in stats["top_words"]:

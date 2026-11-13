@@ -81,6 +81,19 @@ class TestMainTextFormat:
         assert out.startswith("============ BOOKBOT ============")
         assert out.rstrip("\n").endswith("============= END ===============")
 
+    def test_shows_avg_word_length_and_sentence_count(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # #21: SAMPLE has 11 tokens / 32 chars (2.9090...) and two '.'
+        # sentence ends, so the text report shows 2.91 and 2.
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book])
+        main()
+        out = capsys.readouterr().out
+        assert "Average word length: 2.91" in out
+        assert "------ Sentence Statistics ------" in out
+        assert "Sentence count: 2" in out
+
 
 class TestMainJsonFormat:
     def test_emits_valid_json(self, tmp_path, monkeypatch, capsys):
@@ -95,6 +108,20 @@ class TestMainJsonFormat:
             (ch, SAMPLE.lower().count(ch)) for ch in set(SAMPLE.lower())
         )
         assert all(set(w) == {"word", "count"} for w in data["most_common_words"])
+
+    def test_exposes_avg_word_length_and_sentence_count(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # #21 acceptance: --format json exposes avg_word_length (float)
+        # and sentence_count (int). SAMPLE = 11 tokens / 32 chars.
+        book = _write_book(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", book, "--format", "json"])
+        main()
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data["avg_word_length"], float)
+        assert data["avg_word_length"] == pytest.approx(32 / 11)
+        assert isinstance(data["sentence_count"], int)
+        assert data["sentence_count"] == 2
 
     def test_top_words_ordered_by_count(self, tmp_path, monkeypatch, capsys):
         book = _write_book(tmp_path)
@@ -115,6 +142,9 @@ class TestMainCsvFormat:
         summary = {r[1]: r[2] for r in rows if r[0] == "summary"}
         assert summary["file"] == book
         assert int(summary["word_count"]) == 11
+        # #21: both new stats ride along in the summary block.
+        assert float(summary["avg_word_length"]) == pytest.approx(32 / 11)
+        assert int(summary["sentence_count"]) == 2
 
 
 class TestTopNFlag:
@@ -292,6 +322,25 @@ class TestEntryPoint:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert data["most_common_words"] == [{"word": "the", "count": 3}]
+
+    def test_new_stats_via_subprocess(self, tmp_path):
+        # #21 acceptance, end to end through a real process: the JSON
+        # report carries avg_word_length (float) and sentence_count (int).
+        book = _write_book(tmp_path)
+        result = _run_cli(book, "--format", "json")
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert isinstance(data["avg_word_length"], float)
+        assert data["avg_word_length"] == pytest.approx(32 / 11)
+        assert isinstance(data["sentence_count"], int)
+        assert data["sentence_count"] == 2
+
+    def test_new_stats_in_text_report_via_subprocess(self, tmp_path):
+        book = _write_book(tmp_path)
+        result = _run_cli(book)
+        assert result.returncode == 0
+        assert "Average word length: 2.91" in result.stdout
+        assert "Sentence count: 2" in result.stdout
 
     def test_top_bad_value_via_subprocess(self, tmp_path):
         book = _write_book(tmp_path)
