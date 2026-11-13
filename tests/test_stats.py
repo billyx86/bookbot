@@ -113,6 +113,36 @@ class TestDecodeBookBytes:
         result = decode_book_bytes(bytes(range(256)))
         assert isinstance(result, str) and "\x00" in result
 
+    def test_cp1252_smart_quotes_decoded(self):
+        # #17: cp1252 smart quotes (bytes 0x93/0x94) must decode to real
+        # Unicode, not the C1 controls the latin-1 fallback used to produce.
+        raw = b"He said \x93hello\x94 and left."
+        assert decode_book_bytes(raw) == "He said \u201chello\u201d and left."
+
+    def test_cp1252_em_dash_and_bullet(self):
+        # em-dash 0x97 and bullet 0x95 — the cp1252 punctuation a real
+        # legacy .txt book is full of.
+        raw = b"The end \x97 new \x95 1999"
+        assert decode_book_bytes(raw) == "The end \u2014 new \u2022 1999"
+
+    def test_cp1252_undefined_byte_falls_to_latin1(self):
+        # 0x90 is undefined in cp1252, so a byte cp1252 cannot map still
+        # lands in the latin-1 fallback (never raises, same character).
+        raw = b"\x90"
+        assert decode_book_bytes(raw) == "\x90"
+
+    def test_cp1252_text_passes_text_gate(self):
+        # The payoff of #17: decoded smart quotes no longer trip the
+        # C1-control binary scan that used to reject the whole file.
+        raw = b"He said \x93hello\x94 and left the room."
+        assert looks_like_text(decode_book_bytes(raw))
+
+    def test_latin1_identical_bytes_still_fine(self):
+        # 0xE9 (é) maps identically in cp1252 and latin-1, so the existing
+        # fallback path returns the same character once cp1252 is first.
+        raw = "café".encode("latin-1")
+        assert decode_book_bytes(raw) == "café"
+
 
 class TestLooksLikeText:
     def test_plain_text(self):
@@ -198,6 +228,17 @@ class TestGetBookText:
         book = tmp_path / "book.txt"
         book.write_bytes(text.encode("latin-1"))
         assert get_book_text(str(book)) == text
+
+    def test_cp1252_book_is_read(self, tmp_path, capsys):
+        # #17: a real cp1252 book (smart quotes, em-dash, bullet) decodes to
+        # proper Unicode and passes the text gate — no "not a text file" error.
+        raw = b"He said \x93hello,\x94 the end \x97 a \x95 list."
+        book = tmp_path / "book.txt"
+        book.write_bytes(raw)
+        assert (
+            get_book_text(str(book))
+            == "He said \u201chello,\u201d the end \u2014 a \u2022 list."
+        )
 
     def test_utf8_bom_is_stripped(self, tmp_path):
         book = tmp_path / "book.txt"

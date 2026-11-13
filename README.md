@@ -13,8 +13,8 @@ python3 main.py <path_to_book> [--format text|json|csv] [--top N]
 ```
 
 Book files must be plain text. BookBot auto-detects the encoding —
-UTF-8 (with or without BOM), UTF-16 (with BOM), and latin-1 — so
-scanned books in any of those work out of the box. Missing, unreadable,
+UTF-8 (with or without BOM), UTF-16 (with BOM), cp1252, and latin-1 —
+so scanned books in any of those work out of the box. Missing, unreadable,
 binary or empty files produce a friendly error message instead of a
 traceback. Binary detection is two-stage: NUL bytes are rejected
 outright, and a file that is mostly control characters (a binary blob

@@ -45,10 +45,15 @@ def decode_book_bytes(raw):
     """Decode a book's raw bytes into text.
 
     Tries UTF-8 (with optional BOM) first, then UTF-16 when the byte order
-    mark is present, and finally latin-1, which maps every byte and so
-    never raises. Callers should still run the result through
-    ``looks_like_text`` — the chain always returns *something*, and
-    genuinely binary files decode to NULs or control characters under
+    mark is present, then cp1252 (the dominant legacy Windows encoding —
+    its smart quotes, em-dashes and bullets decode to real Unicode rather
+    than the C1 control characters a latin-1 read produces, which would
+    trip ``looks_like_text``), and finally latin-1, which maps every byte
+    and so never raises. cp1252 rejects the five codepoints it leaves
+    undefined (0x81/8D/8F/90/9D), so bytes it cannot map still fall
+    through to latin-1 unchanged. Callers should still run the result
+    through ``looks_like_text`` — the chain always returns *something*,
+    and genuinely binary files decode to NULs or control characters under
     latin-1.
     """
     try:
@@ -60,6 +65,10 @@ def decode_book_bytes(raw):
             return raw.decode("utf-16")
         except UnicodeDecodeError:
             pass
+    try:
+        return raw.decode("cp1252")
+    except UnicodeDecodeError:
+        pass
     return raw.decode("latin-1")
 
 
@@ -68,8 +77,8 @@ def get_book_text(filepath):
 
     Exits with a friendly error message if the file is missing,
     unreadable, not a text file, or empty. Encodings: UTF-8 (with or
-    without BOM), UTF-16 (with BOM), and latin-1 as a last resort —
-    see ``decode_book_bytes``.
+    without BOM), UTF-16 (with BOM), cp1252, and latin-1 as a last
+    resort — see ``decode_book_bytes``.
     """
     try:
         with open(filepath, "rb") as f:
