@@ -299,3 +299,102 @@ class TestEntryPoint:
         assert result.returncode == 2
         assert "positive integer" in result.stdout
         assert "Traceback" not in result.stderr
+
+
+class TestStdin:
+    """#18: read the book from standard input (real subprocess pipes)."""
+
+    @staticmethod
+    def _run_stdin(data, *args):
+        """Run `python3 main.py <args...>` with `data` (bytes) on stdin.
+
+        No `text=True` — the pipe carries raw bytes (incl. cp1252); we
+        decode the child's stdout ourselves.
+        """
+        proc = subprocess.run(
+            [sys.executable, MAIN, *args],
+            input=data,
+            capture_output=True,
+            cwd=REPO_ROOT,
+            timeout=30,
+        )
+        proc.stdout = proc.stdout.decode("utf-8", "replace")
+        proc.stderr = proc.stderr.decode("utf-8", "replace")
+        return proc
+
+    def test_dash_reads_piped_utf8(self):
+        proc = self._run_stdin(SAMPLE.encode("utf-8"), "-", "--format", "json")
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        assert data["file"] == "(stdin)"
+        assert data["word_count"] == 11
+
+    def test_stdin_flag_reads_piped_utf8(self):
+        proc = self._run_stdin(SAMPLE.encode("utf-8"), "--stdin", "-f", "text")
+        assert proc.returncode == 0, proc.stderr
+        assert "Analyzing book found at (stdin)..." in proc.stdout
+        assert "Found 11 total words" in proc.stdout
+
+    def test_dash_refuses_binary_pipe(self):
+        proc = self._run_stdin(b"\x00\x01\x02\x03\x04\x05", "-")
+        assert proc.returncode == 1
+        assert "not a text file" in proc.stdout
+        assert "Traceback" not in proc.stderr
+
+    def test_dash_refuses_empty_pipe(self):
+        proc = self._run_stdin(b"   \n  ", "-")
+        assert proc.returncode == 1
+        assert "empty" in proc.stdout.lower()
+
+    def test_stdin_flag_with_top_and_format(self):
+        proc = self._run_stdin(
+            SAMPLE.encode("utf-8"), "--stdin", "--top", "1", "-f", "json"
+        )
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        assert data["most_common_words"] == [{"word": "the", "count": 3}]
+
+    def test_zcat_gzip_pipeline(self, tmp_path):
+        # The #18 motivating case: zcat book.txt.gz | bookbot -
+        import gzip
+
+        gz = tmp_path / "book.txt.gz"
+        with gzip.open(gz, "wb") as f:
+            f.write(SAMPLE.encode("utf-8"))
+        proc = subprocess.run(
+            f"zcat {gz} | {sys.executable} {MAIN} - --format json",
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        assert data["file"] == "(stdin)"
+        assert data["word_count"] == 11
+
+    def test_stdin_cp1252_pipe(self):
+        # #17 + #18 intersect: cp1252 smart quotes on stdin decode properly.
+        proc = self._run_stdin(b"he said \x93hi\x94", "-", "-f", "json")
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        assert data["word_count"] == 3  # he / said / hi (quotes delimit)
+
+    def test_file_path_behaviour_unchanged(self, tmp_path):
+        book = _write_book(tmp_path)
+        result = _run_cli(book, "--format", "json")
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["file"] == book  # still the literal path
+        assert data["word_count"] == 11
+
+    def test_stdin_plus_file_is_usage_error(self):
+        result = _run_cli("--stdin", "book.txt")
+        assert result.returncode == 1
+        assert "Usage" in result.stdout
+
+    def test_help_mentions_stdin(self):
+        result = _run_cli("--help")
+        assert result.returncode == 0
+        assert "stdin" in result.stdout
