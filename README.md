@@ -3,8 +3,8 @@
 BookBot is my first [Boot.dev](https://www.boot.dev) project!
 
 A tiny command-line tool that analyses a plain-text book: total word count,
-per-character frequency (with each letter's share of the whole), and the ten
-most common words.
+average word length, sentence count, per-character frequency (with each
+letter's share of the whole), and the ten most common words.
 
 ## Usage
 
@@ -39,16 +39,20 @@ whose bytes happen to contain no NUL) is rejected the same way.
 
 - **`text`** (default) — the classic report for people.
 - **`json`** — a machine-readable object with `file`, `word_count`,
-  `character_count`, and `most_common_words`, for piping into scripts.
-- **`csv`** — a flat `section,key,value` table (a `summary` block, one
-  `char` row per character, one `top_word` row per most-common word) for
-  spreadsheets.
+  `avg_word_length`, `sentence_count`, `character_count`, and
+  `most_common_words`, for piping into scripts.
+- **`csv`** — a flat `section,key,value` table (a `summary` block —
+  file path, word count, average word length, sentence count — one
+  `char` row per character, one `top_word` row per most-common word)
+  for spreadsheets.
 
 ```bash
 $ python3 main.py books/frankenstein.txt --format json
 {
   "file": "books/frankenstein.txt",
   "word_count": 78115,
+  "avg_word_length": 4.65,
+  "sentence_count": 10243,
   "character_count": { ... },
   "most_common_words": [ { "word": "the", "count": 8171 }, ... ]
 }
@@ -57,6 +61,8 @@ $ python3 main.py books/frankenstein.txt -f csv
 section,key,value
 summary,file,books/frankenstein.txt
 summary,word_count,78115
+summary,avg_word_length,4.65
+summary,sentence_count,10243
 char,e,108652
 ...
 top_word,the,8171
@@ -74,6 +80,20 @@ Works with all three output formats.
 $ python3 main.py books/frankenstein.txt --top 3
 ```
 
+### Average word length and sentence count
+
+Every report also carries two numbers derived from the text:
+
+- **Average word length** — the total number of characters in the
+  whitespace-separated words, divided by the word count. It uses the
+  same token set as `word_count`, so punctuation stays attached and
+  `mat.` counts as a four-character word.
+- **Sentence count** — a deliberate heuristic: every run of `.`, `!` or
+  `?` counts as one sentence end. It **over-counts** abbreviations
+  (`e.g.`, `Mr.`) and decimals (`3.14`), and **under-counts** sentences
+  written without terminal punctuation (`hello there` is `0`). It is
+  cheap and honest about those limits — not an exact parse.
+
 ### Example
 
 ```
@@ -82,6 +102,9 @@ $ python3 main.py books/frankenstein.txt
 Analyzing book found at books/frankenstein.txt...
 ----------- Word Count ----------
 Found 78115 total words
+Average word length: 4.65
+------ Sentence Statistics ------
+Sentence count: 10243
 --------- Character Count -------
 e: 108652 (12.83%)
 t: 81526 (9.68%)
@@ -112,7 +135,7 @@ folder (the folder is git-ignored on purpose — book files are big!).
 ```
 bookbot
 ├── main.py              # CLI entry point: reads the book, prints the report
-├── stats.py             # Pure functions: word count, char count, top words
+├── stats.py             # Pure functions: word/char counts, top words, avg word length, sentence count
 ├── tests/
 │   ├── test_stats.py    # pytest suite: stats, decoding, formatters
 │   └── test_cli.py      # pytest suite: parse_args, main(), entry point
@@ -158,5 +181,5 @@ into local commits:
 - [x] `--json` flag for machine-readable output (also `--csv`)
 - [x] `--top N` flag for the most-common-words count
 - [x] Read the book from standard input (`-` / `--stdin`)
-- [ ] Average word length and sentence count
+- [x] Average word length and sentence count
 - [ ] Read EPUB files (needs `ebooklib`)

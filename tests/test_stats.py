@@ -18,7 +18,13 @@ from main import (
     looks_like_text,
     parse_args,
 )
-from stats import get_char_count, get_most_common_words, get_num_words
+from stats import (
+    get_avg_word_length,
+    get_char_count,
+    get_most_common_words,
+    get_num_words,
+    get_sentence_count,
+)
 
 
 class TestGetNumWords:
@@ -34,6 +40,90 @@ class TestGetNumWords:
     def test_punctuation_stays_attached(self):
         # Word count is intentionally a raw whitespace split.
         assert get_num_words("hello, world!") == 2
+
+
+class TestGetAvgWordLength:
+    """#21: average word length over the raw whitespace token set."""
+
+    def test_empty_string_is_zero_float(self):
+        # No words -> 0.0, never a ZeroDivisionError.
+        assert get_avg_word_length("") == 0.0
+
+    def test_whitespace_only_is_zero(self):
+        assert get_avg_word_length("  \n\t  ") == 0.0
+
+    def test_uniform_words(self):
+        # "cat" / "dog" / "pig" are all three characters.
+        assert get_avg_word_length("cat dog pig") == 3.0
+
+    def test_mixed_word_lengths(self):
+        # (1 + 2 + 3) / 3 — the plain arithmetic mean of token lengths.
+        assert get_avg_word_length("a bb ccc") == 2.0
+
+    def test_punctuation_stays_attached(self):
+        # Same token set as get_num_words: "hello," and "world!" are
+        # six-character tokens, so the average is 6.0, not 5.0.
+        assert get_avg_word_length("hello, world!") == 6.0
+
+    def test_returns_float(self):
+        assert isinstance(get_avg_word_length(SAMPLE), float)
+
+    def test_pins_the_raw_token_set(self):
+        # 18 whitespace tokens, 55 characters in total (counting the
+        # trailing punctuation on "mat." / "rat." / "together.").
+        expected = sum(len(w) for w in SAMPLE.split()) / len(SAMPLE.split())
+        assert expected == pytest.approx(55 / 18)
+        assert get_avg_word_length(SAMPLE) == expected
+
+    def test_matches_word_count_consistency(self):
+        # avg * word_count is exactly the characters inside word tokens
+        # — the invariant that ties this to the headline word_count.
+        stats = compute_stats(SAMPLE, top_n=3)
+        total = sum(len(w) for w in SAMPLE.split())
+        assert stats["avg_word_length"] * stats["word_count"] == pytest.approx(total)
+
+
+class TestGetSentenceCount:
+    """#21: sentence count via the documented [.!?]+ heuristic.
+
+    The caveats in ``get_sentence_count``'s docstring are part of the
+    contract: it over-counts abbreviations/decimals and under-counts
+    punctuation-free text, and these tests pin that behaviour so nobody
+    "fixes" it silently.
+    """
+
+    def test_empty_string_is_zero(self):
+        assert get_sentence_count("") == 0
+
+    def test_no_terminators_is_zero(self):
+        # Documented under-count: no terminal punctuation, no sentences.
+        assert get_sentence_count("hello there") == 0
+
+    def test_returns_int(self):
+        assert isinstance(get_sentence_count(SAMPLE), int)
+
+    def test_simple_sentences(self):
+        assert get_sentence_count("One. Two! Three?") == 3
+
+    def test_terminator_at_end_without_trailing_space(self):
+        assert get_sentence_count("The end.") == 1
+
+    def test_terminator_runs_count_once(self):
+        # "?!..." is one run, so one sentence end — not four.
+        assert get_sentence_count("What?! Really...") == 2
+
+    def test_sample_has_three_sentences(self):
+        assert get_sentence_count(SAMPLE) == 3
+
+    def test_overcounts_decimals(self):
+        # Documented over-count: "3.14" adds a phantom sentence end, so
+        # one real sentence is reported as two.
+        assert get_sentence_count("Pi is 3.14.") == 2
+
+    def test_overcounts_abbreviations(self):
+        # Documented over-count: "e.g." contributes two phantom ends, so
+        # one real sentence is reported as three.
+        assert get_sentence_count("Use e.g. this one.") == 3
 
 
 class TestGetCharCount:
@@ -274,6 +364,12 @@ class TestComputeStats:
         stats = compute_stats(SAMPLE, top_n=2)
         assert len(stats["top_words"]) == 2
 
+    def test_avg_word_length_and_sentence_count_present(self):
+        stats = compute_stats(SAMPLE, top_n=3)
+        assert stats["avg_word_length"] == get_avg_word_length(SAMPLE)
+        assert stats["sentence_count"] == get_sentence_count(SAMPLE)
+        assert stats["sentence_count"] == 3
+
 
 class TestFormatText:
     def test_structure(self):
@@ -294,6 +390,23 @@ class TestFormatText:
         out = format_text(compute_stats(SAMPLE, top_n=3), "books/foo.txt")
         assert "books/foo.txt" in out
 
+    def test_avg_word_length_line(self):
+        # 55 chars / 18 tokens = 3.0555... -> two decimals for humans.
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        assert "Average word length: 3.06" in out
+
+    def test_sentence_statistics_section(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        assert "------ Sentence Statistics ------" in out
+        assert "Sentence count: 3" in out
+
+    def test_new_section_sits_between_word_and_character_count(self):
+        out = format_text(compute_stats(SAMPLE, top_n=3), "book.txt")
+        word = out.index("total words")
+        sent = out.index("------ Sentence Statistics ------")
+        chars = out.index("--------- Character Count -------")
+        assert word < sent < chars
+
 
 class TestFormatJson:
     def test_round_trips(self):
@@ -311,6 +424,33 @@ class TestFormatJson:
     def test_indentation_for_readability(self):
         out = format_json(compute_stats(SAMPLE, top_n=1), "book.txt")
         assert "\n  " in out  # indented, not single-line
+
+    def test_avg_word_length_is_a_float(self):
+        import json
+
+        data = json.loads(format_json(compute_stats(SAMPLE, top_n=3), "book.txt"))
+        assert data["avg_word_length"] == pytest.approx(55 / 18)
+        assert isinstance(data["avg_word_length"], float)
+
+    def test_sentence_count_is_an_int(self):
+        import json
+
+        data = json.loads(format_json(compute_stats(SAMPLE, top_n=3), "book.txt"))
+        assert data["sentence_count"] == 3
+        assert isinstance(data["sentence_count"], int)
+
+    def test_new_keys_sit_next_to_word_count(self):
+        import json
+
+        data = json.loads(format_json(compute_stats(SAMPLE, top_n=3), "book.txt"))
+        assert list(data) == [
+            "file",
+            "word_count",
+            "avg_word_length",
+            "sentence_count",
+            "character_count",
+            "most_common_words",
+        ]
 
 
 class TestFormatCsv:
@@ -348,6 +488,80 @@ class TestFormatCsv:
         )
         char_rows = {r[1]: int(r[2]) for r in rows if r[0] == "char"}
         assert sum(char_rows.values()) == sum(get_char_count(SAMPLE).values())
+
+    def test_summary_rows_for_new_stats(self):
+        import csv
+
+        rows = list(
+            csv.reader(
+                io.StringIO(format_csv(compute_stats(SAMPLE, top_n=3), "book.txt"))
+            )
+        )
+        summary = {r[1]: r[2] for r in rows if r[0] == "summary"}
+        assert float(summary["avg_word_length"]) == pytest.approx(55 / 18)
+        assert int(summary["sentence_count"]) == 3
+
+
+class TestByteStableReportFixture:
+    """#21: the whole text report, pinned byte for byte.
+
+    The corpus is hand-checkable: 12 whitespace tokens totalling 33
+    characters (avg 2.75) and two ``.`` sentence ends (sentence count 2).
+    """
+
+    CORPUS = "The cat sat on the mat.\nA rat saw a dog run.\n"
+    EXPECTED = (
+        "============ BOOKBOT ============\n"
+        "Analyzing book found at corpus.txt...\n"
+        "----------- Word Count ----------\n"
+        "Found 12 total words\n"
+        "Average word length: 2.75\n"
+        "------ Sentence Statistics ------\n"
+        "Sentence count: 2\n"
+        "--------- Character Count -------\n"
+        "a: 7 (15.56%)\n"
+        "t: 6 (13.33%)\n"
+        "h: 2 (4.44%)\n"
+        "e: 2 (4.44%)\n"
+        "s: 2 (4.44%)\n"
+        "o: 2 (4.44%)\n"
+        "n: 2 (4.44%)\n"
+        "r: 2 (4.44%)\n"
+        "c: 1 (2.22%)\n"
+        "m: 1 (2.22%)\n"
+        "w: 1 (2.22%)\n"
+        "d: 1 (2.22%)\n"
+        "g: 1 (2.22%)\n"
+        "u: 1 (2.22%)\n"
+        "-------- Most Common Words ------\n"
+        "the: 2\n"
+        "cat: 1\n"
+        "dog: 1\n"
+        "mat: 1\n"
+        "on: 1\n"
+        "rat: 1\n"
+        "run: 1\n"
+        "sat: 1\n"
+        "saw: 1\n"
+        "============= END ==============="
+    )
+
+    def test_hand_checked_values(self):
+        stats = compute_stats(self.CORPUS, top_n=10)
+        assert stats["word_count"] == 12
+        assert stats["avg_word_length"] == 2.75
+        assert stats["sentence_count"] == 2
+
+    def test_full_report_matches_fixture(self):
+        out = format_text(compute_stats(self.CORPUS, top_n=10), "corpus.txt")
+        assert out == self.EXPECTED
+
+    def test_every_section_header_is_33_characters(self):
+        out = format_text(compute_stats(self.CORPUS, top_n=10), "corpus.txt")
+        headers = [
+            line for line in out.split("\n") if line.startswith(("---", "====", "----"))
+        ]
+        assert headers and all(len(h) == 33 for h in headers)
 
 
 class TestParseArgs:
